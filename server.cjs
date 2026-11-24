@@ -3142,7 +3142,7 @@ body.sheetOpen{overflow:hidden}
   border-radius:var(--r)!important;
 }
 .catSideHead{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
-.catAllLink,.catNewLink{
+.catAllLink,.catNewLink,.woCatLink{
   display:flex;align-items:center;gap:10px;
   padding:10px 12px;border-radius:12px;
   text-decoration:none;color:#334155;
@@ -3150,7 +3150,7 @@ body.sheetOpen{overflow:hidden}
   transition:all .2s ease;
   background:#f8fafc;border:1.5px solid transparent;
 }
-.catAllLink:hover,.catNewLink:hover{background:#eff6ff;color:var(--b);border-color:#bfdbfe}
+.catAllLink:hover,.catNewLink:hover,.woCatLink:hover{background:#eff6ff;color:var(--b);border-color:#bfdbfe}
 .catAllActive{background:#eff6ff!important;color:var(--b)!important;border-color:#bfdbfe!important;font-weight:700!important}
 .catNewActive{background:rgba(124,58,237,.08)!important;color:#7c3aed!important;border-color:rgba(124,58,237,.2)!important;font-weight:700!important}
 .catAllIcon{
@@ -3160,7 +3160,7 @@ body.sheetOpen{overflow:hidden}
   background:rgba(37,99,235,.08);border-radius:9px;
   transition:transform .25s cubic-bezier(.34,1.56,.64,1);
 }
-.catAllLink:hover .catAllIcon,.catNewLink:hover .catAllIcon{transform:scale(1.12)}
+.catAllLink:hover .catAllIcon,.catNewLink:hover .catAllIcon,.woCatLink:hover .catAllIcon{transform:scale(1.12)}
 .catAllLabel{flex:1;font-size:13px}
 .catAllCount,.catNewCnt{
   font-size:11px;font-weight:700;
@@ -3244,7 +3244,7 @@ body.sheetOpen{overflow:hidden}
   .catSideHead>.woCatLink{grid-column:1/-1;grid-row:1}
   .catSideHead:has(>.woCatLink)>.catAllLink{grid-column:1;grid-row:2}
   .catSideHead:has(>.woCatLink)>.catNewLink{grid-column:2;grid-row:2}
-  .catAllLink,.catNewLink{flex:1;padding:9px 10px;font-size:12px;gap:7px}
+  .catAllLink,.catNewLink,.woCatLink{flex:1;padding:9px 10px;font-size:12px;gap:7px}
   .catAllIcon{width:30px;height:30px;font-size:16px;border-radius:8px}
 }
 
@@ -6591,7 +6591,10 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
 <div class="layout2">
   <aside class="card side catSideNew">
     <div class="catSideHead">
-      <a href="/writeoffs" class="woCatLink" style="display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-weight:600;font-size:13px;text-decoration:none;color:var(--d);background:#fff;margin:4px 0">📄 Списання товарів</a>
+      <a href="/writeoffs" class="woCatLink" data-catalog-navigation>
+        <span class="catAllIcon" aria-hidden="true"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg></span>
+        <span class="catAllLabel">Списання товарів</span>
+      </a>
       <a href="/catalog" data-catalog-navigation class="catAllLink ${!cat&&!onlyNew&&!onlyFavorites?'catAllActive':''}">
         <span class="catAllIcon">📦</span>
         <span class="catAllLabel">Усі товари</span>
