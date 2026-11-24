@@ -135,6 +135,72 @@ function parseMultipartForm(buffer,contentType){
   }
   return {fields,files};
 }
+// Dedicated database upload reader. Never convert an entire multipart upload to Latin-1.
+function databaseUploadBuffer(buffer,contentType){
+  const match=/boundary=(?:"([^"]+)"|([^;]+))/i.exec(String(contentType||''));
+  const boundary=match&&String(match[1]||match[2]).trim();
+  if(!boundary||boundary.length>200) throw Error('Invalid multipart boundary');
+  const first=Buffer.from('--'+boundary), separator=Buffer.from('\r\n--'+boundary);
+  const crlf=Buffer.from('\r\n'), headEnd=Buffer.from('\r\n\r\n');
+  if(!buffer.subarray(0,first.length).equals(first)) throw Error('Invalid multipart start');
+  let offset=first.length, file=null;
+  while(offset<buffer.length){
+    if(buffer.subarray(offset,offset+2).toString()==='--'){
+      if(!file||!file.length) throw Error('Missing database file');
+      return file;
+    }
+    if(!buffer.subarray(offset,offset+2).equals(crlf)) throw Error('Invalid multipart part');
+    const headerStart=offset+2, end=buffer.indexOf(headEnd,headerStart);
+    if(end<0||end-headerStart>16384) throw Error('Invalid multipart headers');
+    const headers=buffer.toString('utf8',headerStart,end);
+    const start=end+headEnd.length;
+    let next=buffer.indexOf(separator,start);
+    while(next>=0){
+      const suffix=buffer.subarray(next+separator.length,next+separator.length+2).toString();
+      if(suffix==='--'||suffix==='\r\n')break;
+      next=buffer.indexOf(separator,next+separator.length);
+    }
+    if(next<0) throw Error('Incomplete multipart upload');
+    if(/(?:^|;)\s*name="database"/im.test(headers)&&/;\s*filename=/i.test(headers)){
+      if(file)throw Error('Duplicate database file');
+      file=buffer.subarray(start,next);
+    }
+    offset=next+separator.length;
+  }
+  throw Error('Incomplete multipart ending');
+}
+function restoreDatabase(raw,contentType,current){
+  const file=databaseUploadBuffer(raw,contentType);
+  const parsed=JSON.parse(file.toString('utf8').replace(/^\uFEFF/,''));
+  const record=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
+  if(!record(parsed)||!Array.isArray(parsed.products)||!Array.isArray(parsed.orders))throw Error('Invalid database structure');
+  for(const key of ['products','orders','shops','notes','announcements','chatMessages','directMessages','accountingReports','applications','applicationLogs','productBarcodes','kegTypes','kegReturns','kegAdjustments','kegTransfers','stockMovements','workHours','warehouseEmployees','writeOffRequests']){
+    if(!Object.prototype.hasOwnProperty.call(parsed,key))continue;
+    if(!Array.isArray(parsed[key])||parsed[key].some(v=>!record(v)&&!(key==='shops'&&typeof v==='string')))throw Error('Invalid database collection: '+key);
+  }
+  for(const key of ['readState','carts','sessions','presence','stockSettings','stockBalances','missingProductAlerts','favorites','market']){
+    if(Object.prototype.hasOwnProperty.call(parsed,key)&&!record(parsed[key]))throw Error('Invalid database map: '+key);
+  }
+  if(!Object.prototype.hasOwnProperty.call(parsed,'writeOffRequests')){
+    parsed.writeOffRequests=writeOffModule.list(current);
+    parsed.writeOffSequence=current.writeOffSequence||0;
+  }
+  parsed.writeOffSequence=Math.max(Number(parsed.writeOffSequence)||0,Number(current.writeOffSequence)||0);
+  // Preserve the exact pre-restore file independently of the rotating .bak.
+  // Copy directly on disk, never read another complete DB into memory here.
+  const recovery=DB_FILE+'.before-restore';
+  const recoveryTemp=recovery+'.'+crypto.randomUUID()+'.tmp';
+  try{
+    fs.copyFileSync(DB_FILE,recoveryTemp,fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(recoveryTemp,0o600);
+    const fd=fs.openSync(recoveryTemp,'r');try{fs.fsyncSync(fd)}finally{fs.closeSync(fd)}
+    fs.renameSync(recoveryTemp,recovery);
+    fsyncDirectory(path.dirname(DB_FILE));
+  }finally{try{fs.rmSync(recoveryTemp,{force:true})}catch(ignore){}}
+  // JSON.stringify produces valid JSON; avoid parsing the same large DB two more times.
+  atomicReplaceFile(DB_FILE,JSON.stringify(parsed),{keepBackup:true,serializedJson:true});
+  lastDbBackupAt=nowMs();cartBackupDirty=false;
+}
 function backupPasswordValid(value){
   const supplied=Buffer.from(String(value||''));
   const expected=Buffer.from(String(BACKUP_DOWNLOAD_PASSWORD));
@@ -146,7 +212,7 @@ function fsyncDirectory(dir){
   let fd;
   try{ fd=fs.openSync(dir,'r'); fs.fsyncSync(fd); }catch(error){}finally{ if(fd!==undefined)try{fs.closeSync(fd)}catch(error){} }
 }
-function atomicReplaceFile(target,buffer,{keepBackup=false}={}){
+function atomicReplaceFile(target,buffer,{keepBackup=false,serializedJson=false}={}){
   const dir=path.dirname(target);
   fs.mkdirSync(dir,{recursive:true});
   const token=crypto.randomUUID();
@@ -159,8 +225,9 @@ function atomicReplaceFile(target,buffer,{keepBackup=false}={}){
     fs.fsyncSync(fd);
     fs.closeSync(fd); fd=undefined;
 
-    // Не дозволяємо замінити базу неповним або пошкодженим JSON.
-    if(path.resolve(target)===path.resolve(DB_FILE)) JSON.parse(fs.readFileSync(temp,'utf8'));
+    // Для зовнішніх буферів перевіряємо JSON. Результат JSON.stringify вже
+    // синтаксично коректний; повторний JSON.parse великої бази витрачає пам’ять.
+    if(path.resolve(target)===path.resolve(DB_FILE) && !serializedJson) JSON.parse(fs.readFileSync(temp,'utf8'));
 
     if(keepBackup && fs.existsSync(target)){
       const backupTemp=backup+'.write-'+token+'.tmp';
@@ -262,11 +329,11 @@ function writeDb(db,{cartWrite=false}={}){
   normalizeShops(db);
   normalizeChat(db);
   sortProductsInCategories(db);
-  const content=Buffer.from(JSON.stringify(db,null,2),'utf8');
+  const content=JSON.stringify(db);
   // Зміни кошика завжди спочатку атомарно потрапляють в основну базу. Їхню
   // резервну копію робимо окремим відкладеним знімком уже нового стану.
   const keepBackup=!cartWrite;
-  atomicReplaceFile(DB_FILE,content,{keepBackup});
+  atomicReplaceFile(DB_FILE,content,{keepBackup,serializedJson:true});
   if(cartWrite)scheduleCartBackup();
   else {lastDbBackupAt=nowMs();cartBackupDirty=false;}
   const requestState=requestDbContext.getStore();
@@ -6133,6 +6200,15 @@ function settingsCsrfValid(session,value){
   return /^[a-f0-9]{64}$/.test(provided) &&
     crypto.timingSafeEqual(Buffer.from(provided,'hex'),Buffer.from(expected,'hex'));
 }
+let headerLogoCache=null;
+function readActiveHeaderLogo(){
+  const stat=fs.statSync(DB_FILE,{bigint:true});
+  const key=[stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
+  if(headerLogoCache&&headerLogoCache.key===key)return headerLogoCache.variant;
+  const variant=activeHeaderLogo(JSON.parse(fs.readFileSync(DB_FILE,'utf8')));
+  headerLogoCache={key,variant};
+  return variant;
+}
 function activeHeaderLogo(db){
   return db && db.headerLogoVariant==='holiday' ? 'holiday' : 'main';
 }
@@ -6149,7 +6225,7 @@ function saveHeaderLogoVariant(variant){
   }
   if(activeHeaderLogo(original)!==variant || original.headerLogoVariant!==variant){
     original.headerLogoVariant=variant;
-    atomicReplaceFile(DB_FILE,Buffer.from(JSON.stringify(original,null,2),'utf8'),{keepBackup:true});
+    atomicReplaceFile(DB_FILE,JSON.stringify(original),{keepBackup:true,serializedJson:true});
   }
   const context=requestDbContext.getStore();
   if(context) context.db=null;
@@ -6174,7 +6250,7 @@ function saveSiteCallButton(phone,enabled){
   const old=siteCallButtonConfig(original);
   if(old.phone!==next.phone||old.enabled!==next.enabled || !original.siteCallButton){
     original.siteCallButton=next;
-    atomicReplaceFile(DB_FILE,Buffer.from(JSON.stringify(original,null,2),'utf8'),{keepBackup:true});
+    atomicReplaceFile(DB_FILE,JSON.stringify(original),{keepBackup:true,serializedJson:true});
   }
   const context=requestDbContext.getStore();
   if(context)context.db=null;
@@ -6277,7 +6353,7 @@ function revokeSessionsOnly(scope){
   }
   if(removed.length){
     // Atomic replacement + previous-file .bak; exceptions leave the source intact.
-    atomicReplaceFile(DB_FILE,Buffer.from(JSON.stringify(original,null,2),'utf8'),{keepBackup:true});
+    atomicReplaceFile(DB_FILE,JSON.stringify(original),{keepBackup:true,serializedJson:true});
   }
   for(const sid of removed) sessions.delete(sid);
   // Discard cached DB snapshot; a follow-up read must see revoked credentials.
@@ -6313,7 +6389,7 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
   if(req.method==='GET' && ['/taranka-header-logo.png','/taranka-header-logo-main.png','/taranka-header-logo-holiday.png'].includes(url.pathname)){
     const isActive=url.pathname==='/taranka-header-logo.png';
     const variant=isActive
-      ? activeHeaderLogo(JSON.parse(fs.readFileSync(DB_FILE,'utf8')))
+      ? readActiveHeaderLogo()
       : (url.pathname==='/taranka-header-logo-holiday.png'?'holiday':'main');
     const filename=variant==='holiday'?'taranka-header-logo-holiday.png':'taranka-header-logo.png';
     const headerLogoPath=path.join(__dirname,filename);
@@ -7265,7 +7341,13 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
       <div class="card" style="padding:20px"><h2 style="margin-top:0">Відновити базу фотографій</h2><p class="muted">Виберіть ZIP, створений цією сторінкою. Наявна папка фотографій буде замінена після перевірки.</p>${msg.photosInvalid?'<div class="error">ZIP пошкоджений або має неправильну структуру.</div>':''}${msg.photosOk?'<div class="success">Фотографії успішно відновлено.</div>':''}<form class="form" method="post" action="/admin-backup/photos-restore" enctype="multipart/form-data" onsubmit="return confirm('Поточні фотографії товарів буде замінено. Продовжити?')"><label>ZIP із фотографіями<input type="file" name="photos" accept="application/zip,.zip" required></label><button class="danger" type="submit">Відновити фотографії</button></form></div>
     </div></section></div>`, session)); }
   if(req.method==='POST' && url.pathname==='/admin-backup/download'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; ensureDb(); const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'').slice(0,14); const filename=`taranka_database_${stamp}.json`; const stat=fs.statSync(DB_FILE); res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="${filename}"`,'Content-Length':stat.size,'Cache-Control':'no-store'}); return fs.createReadStream(DB_FILE).pipe(res); }
-  if(req.method==='POST' && url.pathname==='/admin-backup/restore'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; try{ const raw=await rawBody(req,100*1024*1024); const form=parseMultipartForm(raw,req.headers['content-type']); const file=form.files.database; if(!file||!file.buffer.length) return redirect(res,'/admin-backup?dbError=invalid'); const parsed=JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/,'')); if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)||!Array.isArray(parsed.products)||!Array.isArray(parsed.orders)) return redirect(res,'/admin-backup?dbError=invalid'); if(!Object.prototype.hasOwnProperty.call(parsed,'writeOffRequests')){parsed.writeOffRequests=writeOffModule.list(db);parsed.writeOffSequence=db.writeOffSequence||0;}else if(!Array.isArray(parsed.writeOffRequests))return redirect(res,'/admin-backup?dbError=invalid'); parsed.writeOffSequence=Math.max(Number(parsed.writeOffSequence)||0,Number(db.writeOffSequence)||0); const normalized=JSON.stringify(parsed,null,2); JSON.parse(normalized); atomicReplaceFile(DB_FILE,Buffer.from(normalized),{keepBackup:true}); return redirect(res,'/admin-backup?dbRestore=ok'); }catch(error){console.error('[restore db]',error);return redirect(res,'/admin-backup?dbError=invalid');} }
+  if(req.method==='POST' && url.pathname==='/admin-backup/restore'){
+    if(!requireProtectedSection(req,res,session,'/admin-backup')) return;
+    try{
+      restoreDatabase(await rawBody(req,100*1024*1024),req.headers['content-type'],db);
+      return redirect(res,'/admin-backup?dbRestore=ok');
+    }catch(error){console.error('[restore db]',error);return redirect(res,'/admin-backup?dbError=invalid');}
+  }
   if(req.method==='POST' && url.pathname==='/admin-backup/work-hours-download'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; const shops=getShops(db); const payload={format:'taranka-work-hours-backup',version:1,createdAt:warsawTime(),workHours:Array.isArray(db.workHours)?db.workHours:[],warehouseEmployees:Array.isArray(db.warehouseEmployees)?db.warehouseEmployees:[],shopEmployees:shops.map(shop=>({shopId:String(shop.id||''),shopName:String(shop.name||''),employees:Array.isArray(shop.employees)?shop.employees:[]}))}; const data=Buffer.from(JSON.stringify(payload,null,2),'utf8'); const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'').slice(0,14); const filename=`taranka_work_hours_${stamp}.json`; res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="${filename}"`,'Content-Length':data.length,'Cache-Control':'no-store'}); return res.end(data); }
   if(req.method==='POST' && url.pathname==='/admin-backup/work-hours-restore'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; try{ const raw=await rawBody(req,50*1024*1024); const form=parseMultipartForm(raw,req.headers['content-type']); const file=form.files.workHoursBackup; if(!file||!file.buffer.length) return redirect(res,'/admin-backup?workHoursError=invalid'); const parsed=JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/,'')); const valid=parsed&&typeof parsed==='object'&&!Array.isArray(parsed)&&parsed.format==='taranka-work-hours-backup'&&Number(parsed.version)===1&&Array.isArray(parsed.workHours)&&Array.isArray(parsed.warehouseEmployees)&&Array.isArray(parsed.shopEmployees)&&parsed.workHours.every(x=>x&&typeof x==='object'&&!Array.isArray(x))&&parsed.warehouseEmployees.every(x=>x&&typeof x==='object'&&!Array.isArray(x))&&parsed.shopEmployees.every(x=>x&&typeof x==='object'&&!Array.isArray(x)&&Array.isArray(x.employees)); if(!valid) return redirect(res,'/admin-backup?workHoursError=invalid'); db.workHours=JSON.parse(JSON.stringify(parsed.workHours)); db.warehouseEmployees=JSON.parse(JSON.stringify(parsed.warehouseEmployees)); const employeeBackup=parsed.shopEmployees; for(const shop of getShops(db)){ const saved=employeeBackup.find(x=>String(x.shopId||'')===String(shop.id||''))||employeeBackup.find(x=>String(x.shopName||'')===String(shop.name||'')); if(saved) shop.employees=JSON.parse(JSON.stringify(saved.employees)); } normalizeShops(db); writeDb(db); return redirect(res,'/admin-backup?workHoursRestore=ok'); }catch(error){console.error('[restore work hours]',error);return redirect(res,'/admin-backup?workHoursError=invalid');} }
   if(req.method==='POST' && url.pathname==='/admin-backup/photos-download'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; fs.mkdirSync(PRODUCT_UPLOADS_DIR,{recursive:true}); const photoFiles=fs.readdirSync(PRODUCT_UPLOADS_DIR,{withFileTypes:true}).filter(entry=>entry.isFile()&&/\.webp$/i.test(entry.name)).map(entry=>entry.name); if(!photoFiles.length) return redirect(res,'/admin-backup?photosError=empty'); const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'').slice(0,14); const filename=`taranka_product_photos_${stamp}.zip`; res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="${filename}"`,'Cache-Control':'no-store'}); const archive=archiver('zip',{zlib:{level:6}}); archive.on('warning',error=>{if(error.code!=='ENOENT')console.error('[backup photos warning]',error)}); archive.on('error',error=>{console.error('[backup photos error]',error);if(!res.headersSent)res.writeHead(500);res.end()}); archive.pipe(res); archive.directory(PRODUCT_UPLOADS_DIR,'products'); archive.finalize(); return; }
