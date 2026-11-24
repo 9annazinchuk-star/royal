@@ -3241,8 +3241,9 @@ body.sheetOpen{overflow:hidden}
   .catCardLbl{font-size:9.5px;min-height:34px}
   .catSideHead{flex-direction:row}
   .catSideHead:has(>.woCatLink){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  .catSideHead>.woCatLink{grid-column:1/-1;grid-row:2}
-  .catSideHead:has(>.woCatLink)>.catNewLink{grid-column:2;grid-row:1}
+  .catSideHead>.woCatLink{grid-column:1/-1;grid-row:1}
+  .catSideHead:has(>.woCatLink)>.catAllLink{grid-column:1;grid-row:2}
+  .catSideHead:has(>.woCatLink)>.catNewLink{grid-column:2;grid-row:2}
   .catAllLink,.catNewLink{flex:1;padding:9px 10px;font-size:12px;gap:7px}
   .catAllIcon{width:30px;height:30px;font-size:16px;border-radius:8px}
 }
@@ -6590,12 +6591,12 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
 <div class="layout2">
   <aside class="card side catSideNew">
     <div class="catSideHead">
+      <a href="/writeoffs" class="woCatLink" style="display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-weight:600;font-size:13px;text-decoration:none;color:var(--d);background:#fff;margin:4px 0">📄 Списання товарів</a>
       <a href="/catalog" data-catalog-navigation class="catAllLink ${!cat&&!onlyNew&&!onlyFavorites?'catAllActive':''}">
         <span class="catAllIcon">📦</span>
         <span class="catAllLabel">Усі товари</span>
         <span class="catAllCount">${db.products.filter(p=>!p.hidden).length}</span>
       </a>
-      <a href="/writeoffs" class="woCatLink" style="display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-weight:600;font-size:13px;text-decoration:none;color:var(--d);background:#fff;margin:4px 0">📄 Списання товарів</a>
       <a href="/catalog?new=1" data-catalog-navigation class="catNewLink ${onlyNew?'catNewActive':''}">
         <span class="catAllIcon" style="background:rgba(124,58,237,.08);display:flex;align-items:center;justify-content:center">${NEW_SVG_ICON}</span>
         <span class="catAllLabel">Новинки${badge(unread.newProducts)}</span>
