@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const writeOffModule = require('./writeoffs.cjs');
 const { AsyncLocalStorage } = require('async_hooks');
 const querystring = require('querystring');
 const PDFDocument = require('pdfkit');
@@ -227,6 +228,7 @@ function readDb(){
     db.productBarcodes=Array.isArray(db.productBarcodes)?db.productBarcodes:[];
     db.applications=Array.isArray(db.applications)?db.applications:[];
     db.applicationLogs=Array.isArray(db.applicationLogs)?db.applicationLogs:[];
+    db.writeOffRequests=Array.isArray(db.writeOffRequests)?db.writeOffRequests:[];
     db.notes=db.notes||[];
     db.announcements=db.announcements||[];
     db.chatMembers=Array.isArray(db.chatMembers)?db.chatMembers:[];
@@ -428,6 +430,7 @@ function notificationItems(db, session){
   const after=Number(seen.notifications||0), out=[];
   const add=(time,icon,title,text,href,type)=>{time=Number(time||0);if(time>after)out.push({time,icon,title,text,href,type});};
   if(session.admin){
+    writeOffModule.list(db).filter(r=>r.status==='sent').forEach(r=>add(r.createdMs,'📄','Нова заявка на списання товарів',`${r.shopName} · ${r.number} · Позицій: ${r.items.length}`,'/admin-writeoffs?id='+encodeURIComponent(r.id),'writeoffs'));
     (db.orders||[]).forEach(o=>add(eventMs(o),'📦','Нова заявка від магазину',`№${o.orderNo||o.id} · ${o.shop||''}`,'/admin-orders','orders'));
     (db.kegReturns||[]).filter(r=>r.status==='Очікує перевірки').forEach(r=>add(eventMs(r),'🛢️','Кеги очікують підтвердження',`№${r.number||''} · ${r.shop||''}`,'/admin-kegs','kegs'));
     (db.kegTransfers||[]).filter(t=>t.status==='Очікує підтвердження складу').forEach(t=>add(eventMs(t),'🔄','Нове переміщення кег',`${t.fromShop||''} → ${t.toShop||''}`,'/admin-kegs','kegTransfers'));
@@ -478,7 +481,7 @@ function adminChatPage(db, session){
   return `<div class="adminShell">${adminMenu()}<section><div class="actions" style="align-items:center;justify-content:space-between;margin-bottom:12px"><h1 style="margin:0">Чат</h1><a class="btn secondary" href="/chat">Відкрити чат</a></div><div class="card" style="padding:20px;margin-bottom:16px"><h2>Учасники чату</h2><p class="muted">Позначте магазини, яким доступний чат. Інші магазини не бачитимуть кнопку та не зможуть відкрити чат.</p><form method="post" action="/admin/chat-members"><div class="shopChecks">${shops.map(shop=>`<label class="shopCheck"><span class="shopCheckName">${esc(shop.name)}</span><input type="checkbox" name="members" value="${esc(shop.name)}" ${members.has(shop.name)?'checked':''}></label>`).join('')}</div><button>Зберегти учасників</button></form></div><div class="card chatBox"><div class="chatHeader"><div><h2>Повідомлення</h2><p class="muted">Відповідайте магазинам у зручному чистому вікні.</p></div></div><div class="chatMessages">${chatMessagesHtml(db, true)}</div><form class="form chatForm" method="post" action="/chat/send"><label>Повідомлення від складу<textarea name="text" required placeholder="Напишіть повідомлення магазинам..."></textarea></label><button>Надіслати</button></form></div></section></div>`;
 }
 
-function adminMenu(active=''){ const menuDb=readDb(),msgUnread=adminDirectUnread(menuDb),notifUnread=notificationsCount(menuDb,{admin:true}),activeClass=key=>active===key?' class="active" aria-current="page"':''; return `<a class="mobileBackToCabinet" href="/admin">← Перейти у Кабінет складу</a><aside class="adminMenu"><div class="adminMenuHead"><a class="adminMenuLogo" href="/admin" style="text-decoration:none">Кабінет</a></div><a href="/admin-notifications">Сповіщення${badgeCount(notifUnread)}</a><a href="/admin-settings">🔒 Налаштування магазинів</a><a href="/admin-products">Товар</a><a href="/admin-statistics"${activeClass('statistics')}>📊 Статистика</a><a href="/admin-market"${activeClass('market')}>📋 Ринок</a><a href="/admin-barcodes">Штрихкоди товарів</a><a href="/admin-new-products">Новинки</a><a href="/admin-applications">Нова заявка</a><a data-unread-key="directMessages" href="/admin-messages">Повідомлення${badgeCount(msgUnread)}</a><a href="/admin-notes">Нотатки</a><a href="/admin-announcements">Оголошення</a><a href="/admin-orders">Замовлення</a><a href="/admin-accounting">🔒 Журнал обліку</a><a href="/admin-work-hours">⏱️ Робочі години</a><a href="/admin-missing-products">Відсутні товари</a><a href="/admin-hidden-products">Приховані позиції</a><a href="/admin-backup">🔒 Резервна копія</a><a href="/admin-logout" class="adminMenuLogout">Вийти</a></aside>`; }
+function adminMenu(active=''){ const menuDb=readDb(),msgUnread=adminDirectUnread(menuDb),notifUnread=notificationsCount(menuDb,{admin:true}),activeClass=key=>active===key?' class="active" aria-current="page"':''; return `<a class="mobileBackToCabinet" href="/admin">← Перейти у Кабінет складу</a><aside class="adminMenu"><div class="adminMenuHead"><a class="adminMenuLogo" href="/admin" style="text-decoration:none">Кабінет</a></div><a href="/admin-notifications">Сповіщення${badgeCount(notifUnread)}</a><a href="/admin-settings">🔒 Налаштування магазинів</a><a href="/admin-products">Товар</a><a href="/admin-statistics"${activeClass('statistics')}>📊 Статистика</a><a href="/admin-market"${activeClass('market')}>📋 Ринок</a><a href="/admin-barcodes">Штрихкоди товарів</a><a href="/admin-new-products">Новинки</a><a href="/admin-applications">Нова заявка</a><a data-unread-key="directMessages" href="/admin-messages">Повідомлення${badgeCount(msgUnread)}</a><a href="/admin-notes">Нотатки</a><a href="/admin-announcements">Оголошення</a><a href="/admin-orders">Замовлення</a><a href="/admin-writeoffs"${activeClass('writeoffs')}>📄 Списання магазинів${badgeCount(writeOffModule.pending(menuDb))}</a><a href="/admin-accounting">🔒 Журнал обліку</a><a href="/admin-work-hours">⏱️ Робочі години</a><a href="/admin-missing-products">Відсутні товари</a><a href="/admin-hidden-products">Приховані позиції</a><a href="/admin-backup">🔒 Резервна копія</a><a href="/admin-logout" class="adminMenuLogout">Вийти</a></aside>`; }
 
 function pluralUk(n, one, few, many){
   n=Math.abs(Number(n)||0); const n10=n%10,n100=n%100;
@@ -576,13 +579,13 @@ function directMessagesHtml(db, shop, canDelete=false, peer='warehouse'){
 function adminCabinetPage(db){
   const items=[
     ['Сповіщення','/admin-notifications','🔔',notificationsCount(db,{admin:true})],
-    ['Замовлення','/admin-orders','🧾'],['Нова заявка','/admin-applications','📲'],['Товари','/admin-products','📦'],['Статистика','/admin-statistics','📊'],['Ринок','/admin-market','📋'],['Штрихкоди товарів','/admin-barcodes','▥',(db.productBarcodes||[]).length],
+    ['Замовлення','/admin-orders','🧾'],['Списання магазинів','/admin-writeoffs','📄',writeOffModule.pending(db)],['Нова заявка','/admin-applications','📲'],['Товари','/admin-products','📦'],['Статистика','/admin-statistics','📊'],['Ринок','/admin-market','📋'],['Штрихкоди товарів','/admin-barcodes','▥',(db.productBarcodes||[]).length],
     ['Новинки','/admin-new-products','🆕',(db.products||[]).filter(p=>p.isNew&&!p.hidden).length],['Відсутні товари','/admin-missing-products','⚠️',missingProductRows(db).length],['Приховані позиції','/admin-hidden-products','🙈'],
     ['Журнал обліку','/admin-accounting','🔒'],['Робочі години','/admin-work-hours','⏱️'],
     ['Повідомлення','/admin-messages','✉️',adminDirectUnread(db)],['Оголошення','/admin-announcements','📢'],
-    ['Нотатки','/admin-notes','📝'],['Налаштування магазинів','/admin-settings','🔒'],['Резервна копія','/admin-backup','🔒'],['Вийти зі складу','/admin-logout','🚪',0,'logout']
+    ['Нотатки','/admin-notes','📝'],['Налаштування магазинів','/admin-settings','🔒'],['Налаштування','/admin-system-settings','⚙️',0,'gear'],['Резервна копія','/admin-backup','🔒'],['Вийти зі складу','/admin-logout','🚪',0,'logout']
   ];
-  return `<div class="adminShell adminHomeShell">${adminMenu()}<section><h1>Кабінет складу</h1>${notificationsPanel(db,{admin:true},true)}<div class="adminCabinetCards">${items.map(i=>`<a class="adminCabinetCard ${i[4]==='logout'?'adminCabinetCardLogout':''}" href="${i[1]}"><span class="adminCabinetCardIcon">${i[2]}${i[3]?`<span class="adminCabinetCardBadge">${i[3]}</span>`:''}</span><span class="adminCabinetCardTitle">${i[0]}</span></a>`).join('')}</div></section></div>`;
+  return `<div class="adminShell adminHomeShell">${adminMenu()}<section><h1>Кабінет складу</h1><div id="woNotificationHome">${notificationsPanel(db,{admin:true},true)}</div><div class="adminCabinetCards">${items.map(i=>`<a class="adminCabinetCard ${i[4]==='logout'?'adminCabinetCardLogout':''}" href="${i[1]}"${i[4]==='gear'?' aria-label="Налаштування" title="Налаштування"':''}><span class="adminCabinetCardIcon">${i[2]}${i[3]?`<span class="adminCabinetCardBadge">${i[3]}</span>`:''}</span>${i[4]==='gear'?'<span class="visuallyHidden">Налаштування</span>':`<span class="adminCabinetCardTitle">${i[0]}</span>`}</a>`).join('')}</div></section></div>`;
 }
 
 const STATISTICS_PERIODS=new Set(['7','30','60','90','current_month','previous_month','custom','all']);
@@ -1162,7 +1165,7 @@ function adminWarehouseWorkHoursXlsx(db,url){
 }
 function shopCabinetPage(db, session){
   const unread=unreadCounts(db, session);
-  const items=[['Сповіщення','/notifications','🔔',notificationsCount(db,session)],['Каталог','/catalog','📦'],['Кошик','/cart','🛒',(session.cart||[]).reduce((a,i)=>a+Number(i.qty||0),0)],['Журнал обліку','/cabinet/accounting','📒'],['Робочі години','/work-hours','⏱️'],['Повідомлення','/messages','✉️',unread.directMessages],['Оголошення','/about','📢',unread.announcements]];
+  const items=[['Сповіщення','/notifications','🔔',notificationsCount(db,session)],['Каталог','/catalog','📦'],['Списання товарів','/writeoffs','📄'],['Кошик','/cart','🛒',(session.cart||[]).reduce((a,i)=>a+Number(i.qty||0),0)],['Журнал обліку','/cabinet/accounting','📒'],['Робочі години','/work-hours','⏱️'],['Повідомлення','/messages','✉️',unread.directMessages],['Оголошення','/about','📢',unread.announcements]];
   if(canUseChat(db, session)) items.push(['Чат','/chat','💬',unread.chat]);
   items.push(['Вийти','/shop-logout','🚪',0,'logout']);
   return `<section><h1>Кабінет магазину</h1><p class="muted" style="margin-top:-8px;margin-bottom:16px">${esc(session.shop||'')}</p>${notificationsPanel(db,session,true)}<div class="adminCabinetCards shopCabinetCards">${items.map(i=>`<a class="adminCabinetCard ${i[4]==='logout'?'adminCabinetCardLogout':''}" href="${i[1]}"><span class="adminCabinetCardIcon">${i[2]}${i[3]?`<span class="adminCabinetCardBadge">${i[3]}</span>`:''}</span><span class="adminCabinetCardTitle">${i[0]}</span></a>`).join('')}</div></section>`;
@@ -2301,13 +2304,22 @@ function getSession(req,res){
     sid=crypto.randomBytes(18).toString('hex');
     setSessionCookie(res, sid);
   }
+  // The persisted session is the ONLY authority for authentication. Never
+  // re-grant a role from an older in-memory Map entry after revocation.
   const saved=db.sessions[sid] || {};
-  if(!sessions.has(sid)) sessions.set(sid,{sid, admin:!!saved.admin, shop:saved.shop || null, protectedSectionsUnlocked:!!saved.protectedSectionsUnlocked});
+  const nextAdmin=!!saved.admin;
+  const nextShop=saved.shop || null;
+  if(!sessions.has(sid)) sessions.set(sid,{sid,admin:false,shop:null});
   const session=sessions.get(sid);
+  if(session.admin!==nextAdmin || session.shop!==nextShop){
+    session.protectedSectionActive='';
+    session.protectedSectionTicket='';
+    session.protectedSectionTarget='';
+  }
   session.sid=sid;
-  session.admin=!!saved.admin || !!session.admin;
-  session.shop=saved.shop || session.shop || null;
-  session.protectedSectionsUnlocked=!!saved.protectedSectionsUnlocked || !!session.protectedSectionsUnlocked;
+  session.admin=nextAdmin;
+  session.shop=nextShop;
+  session.protectedSectionsUnlocked=!!saved.protectedSectionsUnlocked;
   loadCartForSession(session, db);
   return session;
 }
@@ -2375,6 +2387,7 @@ function layout(title, content, session={cart:[]}){
   const layoutDb=readDb();
   const unread=unreadCounts(layoutDb, session);
   const logoHref=session.admin?'/admin':'/';
+  const callButton=siteCallButtonConfig(layoutDb);
   const tickerAnnouncements=session.shop?(Array.isArray(layoutDb.announcements)?layoutDb.announcements:[]).filter(a=>a&&a.tickerActive!==false&&String(a.text||'').trim()):[];
   const safeTickerColor=value=>/^#[0-9a-fA-F]{6}$/.test(String(value||''))?String(value):'#334155';
   const tickerItems=tickerAnnouncements.map(a=>`<span class="shopAnnouncementTickerItem" style="color:${safeTickerColor(a.textColor)}">${esc(String(a.text||'').trim())}</span>`).join('<span class="shopAnnouncementTickerSep" aria-hidden="true">•</span>');
@@ -2401,6 +2414,9 @@ body{font-family:'Inter',system-ui,Arial,sans-serif;background:var(--bg);color:#
 .logo{font-weight:900;color:var(--d);text-decoration:none;font-size:19px;letter-spacing:-.4px;display:flex;align-items:center;line-height:1.1;flex-shrink:0}
 .logo span{display:block;font-size:11px;font-weight:600;color:var(--b);letter-spacing:.04em;text-transform:uppercase;opacity:.8}
 .siteLogoImg{display:block;height:32px;width:auto;max-width:150px;object-fit:contain}
+.siteCallBtn{display:inline-flex;align-items:center;justify-content:center;gap:7px;margin-left:0;flex-shrink:0;min-height:38px;padding:8px 12px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;text-decoration:none;font-weight:700;font-size:13px;line-height:1;white-space:nowrap;transition:background .15s ease}
+.siteCallBtn:hover,.siteCallBtn:focus-visible{background:#dbeafe;color:#1e40af}
+.siteCallBtn svg{flex-shrink:0}
 .shopPill{background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:700;color:#1d4ed8;letter-spacing:.01em}
 .shopAnnouncementTicker{border-top:1px solid rgba(226,232,240,.7);background:linear-gradient(90deg,#f8fbff,#eff6ff,#f8fbff);overflow:hidden;white-space:nowrap}
 .shopAnnouncementTickerInner{max-width:1200px;margin:0 auto;padding:5px 20px;display:flex;align-items:center;gap:10px}
@@ -2425,6 +2441,10 @@ body{font-family:'Inter',system-ui,Arial,sans-serif;background:var(--bg);color:#
   .links::-webkit-scrollbar{display:none}
   .links a{padding:7px 10px;white-space:nowrap;font-size:13px;flex-shrink:0;border-radius:9px}
   .siteLogoImg{height:24px;max-width:116px}
+  .logo{order:1}
+  .shopPill{order:2}
+  .siteCallBtn{order:3;min-height:34px;font-size:12px;padding:7px 10px;margin-left:auto}
+  .links{order:4}
   .shopAnnouncementTickerInner{padding:4px 12px;gap:7px}
   .shopAnnouncementTickerText{font-size:14px!important;padding-right:48px}
   .shopAnnouncementTickerTrack{animation-duration:24s}
@@ -2438,6 +2458,8 @@ body{font-family:'Inter',system-ui,Arial,sans-serif;background:var(--bg);color:#
   .links a.mobileChat{order:5}
   .links a.mobileLogout{order:6}
 }
+
+@media (min-width:701px) and (max-width:1100px){.siteCallBtn{padding:8px;min-width:38px}.siteCallBtn span{display:none}}
 
 /* ── LAYOUT ── */
 .wrap{max-width:1200px;margin:0 auto;padding:28px 20px}
@@ -3151,6 +3173,9 @@ body.sheetOpen{overflow:hidden}
   .catIconNew svg{width:28px;height:28px}
   .catCardLbl{font-size:9.5px;min-height:34px}
   .catSideHead{flex-direction:row}
+  .catSideHead:has(>.woCatLink){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .catSideHead>.woCatLink{grid-column:1/-1;grid-row:2}
+  .catSideHead:has(>.woCatLink)>.catNewLink{grid-column:2;grid-row:1}
   .catAllLink,.catNewLink{flex:1;padding:9px 10px;font-size:12px;gap:7px}
   .catAllIcon{width:30px;height:30px;font-size:16px;border-radius:8px}
 }
@@ -3274,6 +3299,7 @@ body.sheetOpen{overflow:hidden}
 .adminCabinetCard:hover{transform:translateY(-3px);box-shadow:var(--shadow);border-color:#bfdbfe}
 .adminCabinetCardIcon{position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:20px;background:linear-gradient(145deg,#eff6ff,#ffffff);border:1px solid #dbeafe;font-size:34px;line-height:1;box-shadow:0 8px 18px rgba(37,99,235,.09)}
 .adminCabinetCardTitle{width:100%;text-align:center;font-weight:800;font-size:15px;line-height:1.25;overflow-wrap:anywhere}
+.visuallyHidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 .adminCabinetCardBadge{position:absolute;top:-7px;right:-7px;min-width:24px;height:24px;padding:0 6px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:#ef4444;color:#fff;border:2px solid #fff;font-size:12px;font-weight:900;box-shadow:0 4px 10px rgba(239,68,68,.28)}
 .adminCabinetCardLogout{color:#b91c1c;border-color:#fecaca;background:#fffafa}
 .adminCabinetCardLogout .adminCabinetCardIcon{background:#fff1f2;border-color:#fecdd3}
@@ -5178,9 +5204,9 @@ async function toggleFavorite(event,button){
 
 document.addEventListener('DOMContentLoaded',function(){restoreScrollState();try{const p=location.pathname;const nav=document.querySelector('.links');if(nav){let sel='';if(p==='/cabinet'||p.startsWith('/cabinet/'))sel='.mobileCabinet';else if(p==='/messages'||p.startsWith('/messages/'))sel='.mobileMessages';else if(p==='/cart'||p.startsWith('/cart/'))sel='.mobileCart';else if(p==='/about'||p.startsWith('/about/'))sel='.mobileAnnouncements';if(sel){const a=nav.querySelector(sel);if(a)a.classList.add('shopNavActive')}}}catch(e){}document.querySelectorAll('.accountingForm').forEach(calcAccountingForm);initChatAutoRefresh();initFloatingCartVisibility();document.querySelectorAll('select[name=category]').forEach(toggleDepositCheckbox);try{if(location.pathname==='/admin-products'||location.pathname==='/admin-new-products'){const y=sessionStorage.getItem('adminProductsScroll');if(y!==null){sessionStorage.removeItem('adminProductsScroll');setTimeout(function(){window.scrollTo(0,Number(y)||0)},0);}}}catch(e){}});
 document.addEventListener('submit',function(e){const f=e.target;if(f && f.matches('form.directDeleteForm')){e.preventDefault();e.stopPropagation();deleteDirectMessage(f);return false}if(f && f.matches('form.chatForm')){e.preventDefault();e.stopPropagation();sendChatMessage(f);return false}if(f && f.matches('form[data-ajax-cart]')){e.preventDefault();e.stopPropagation();const action=f.dataset.action;if(action==='add')addToCart(f);else if(action==='qty')changeQty(f);else if(action==='remove')removeCart(f);else if(action==='clear')clearCart(f);return false}if(f && f.matches('form[data-ajax-admin-order]')){e.preventDefault();e.stopPropagation();if(f.classList.contains('orderSearchAddBox')&&!prepareOrderProductAdd(f))return false;adminOrderFetch(f);return false}if(f && f.matches('form.orderSearchAddBox')){e.preventDefault();e.stopPropagation();addOrderDraftProduct(f);return false}if(f && f.matches('form[data-preserve-admin-scroll]')){saveAdminScroll();return}if(f && f.method && String(f.method).toLowerCase()==='post'){saveScrollState();}},true);
-</script></head><body>
+</script>${session.admin?`<script>${writeOffPollScript}</script>`:''}</head><body>
 <header class="top"><nav class="nav">
-  <a class="logo" href="${logoHref}" aria-label="TARANKA"><img class="siteLogoImg" src="/taranka-header-logo.png" alt="TARANKA"></a>
+  <a class="logo" href="${logoHref}" aria-label="TARANKA"><img class="siteLogoImg" src="/taranka-header-logo.png?variant=${activeHeaderLogo(layoutDb)}" alt="TARANKA"></a>
   ${session.shop?`<span class="shopPill">${esc(session.shop)}</span>`:''}
   <div class="links">
     <a class="mobileHide" href="/">Головна</a>
@@ -5189,6 +5215,7 @@ document.addEventListener('submit',function(e){const f=e.target;if(f && f.matche
     
     ${session.admin?`<a href="/admin">Склад</a><a href="/admin-logout">Вийти зі складу</a>`:(!session.shop?`<a class="mobileHide" href="/admin-login">Склад</a>`:'')}
   </div>
+  ${callButton.enabled?`<a class="siteCallBtn" href="tel:${callButton.phone}" aria-label="Зателефонувати: ${esc(callButton.phone)}" title="Зателефонувати: ${esc(callButton.phone)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 11.2 18a19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.12.96.35 1.9.7 2.8a2 2 0 0 1-.45 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.25a2 2 0 0 1 2.1-.45c.9.35 1.84.58 2.8.7A2 2 0 0 1 22 16.9z"/></svg><span>Дзвінок</span></a>`:''}
 </nav>${session.shop&&tickerText?`<div class="shopAnnouncementTicker" role="status" aria-label="Оголошення складу"><div class="shopAnnouncementTickerInner"><span class="shopAnnouncementTickerIcon" aria-hidden="true">📢</span><div class="shopAnnouncementTickerViewport"><div class="shopAnnouncementTickerTrack"><span class="shopAnnouncementTickerText">${tickerText}</span><span class="shopAnnouncementTickerText" aria-hidden="true">${tickerText}</span></div></div></div></div>`:''}</header>
 <main class="wrap">${content}</main>
 ${session.shop?'<div id="cartSaveStatus" class="cartSaveStatus" role="status" aria-live="polite"></div>':''}
@@ -6015,7 +6042,7 @@ function appPrint(app,auto,options={}){
   return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>${esc(app.number)}</title><style>
 *{box-sizing:border-box}body{font-family:Arial,sans-serif;padding:24px;color:#111;background:#fff}.printButton{margin-bottom:14px;padding:8px 14px}.documentHead{position:relative;min-height:82px;padding-right:155px;margin-bottom:16px}.documentLogo{position:absolute;right:0;top:0;width:105px;height:auto;max-height:70px;object-fit:contain}.meta{display:grid;gap:7px;font-size:14px;line-height:1.35}.metaRow{display:grid;grid-template-columns:120px 1fr;gap:10px}.metaLabel{font-weight:700}.orderTable{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 24px}.orderTable th,.orderTable td{border:1px solid #777;padding:5px 7px;font-size:12px;vertical-align:middle}.orderTable th{background:#eee;font-weight:700;text-align:center}.orderTable th:nth-child(1),.orderTable td:nth-child(1){width:48px;text-align:center}.orderTable th:nth-child(3),.orderTable td:nth-child(3){width:145px;text-align:center}.orderTable th:nth-child(4),.orderTable td:nth-child(4){width:150px;text-align:center;overflow-wrap:anywhere}.barcodeCell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;line-height:1}.barcodeCell img{display:block;width:132px;max-width:100%;height:28px;object-fit:fill;margin:0}.barcodeCell span{display:block;margin-top:1px;font-size:9px;line-height:1;letter-spacing:.03em;overflow-wrap:anywhere}.noBarcode{color:#777;font-size:10px}.empty{text-align:center;color:#666;padding:18px!important}.depositSummaryRow td{background:#f8fafc;border-top:2px solid #555}.suppliesStart td{border-top:1px solid #777!important}.sign{display:flex;justify-content:space-between;margin-top:50px;font-size:13px}
 @media print{body{padding:0}.printButton{display:none}.documentHead{break-inside:avoid}.orderTable{page-break-inside:auto}.orderTable tr{page-break-inside:avoid;page-break-after:auto}.orderTable thead{display:table-header-group}@page{size:A4;margin:12mm}}
-</style></head><body><button class="printButton" onclick="window.print()">Drukuj / zapisz PDF</button><header class="documentHead"><img class="documentLogo" src="/taranka-header-logo.png" alt="TARANKA"><div class="meta"><div class="metaRow"><span class="metaLabel">Numer zamówienia:</span><span>${esc(app.number)}</span></div><div class="metaRow"><span class="metaLabel">Data:</span><span>${esc(app.completedAt||app.createdAt)}</span></div><div class="metaRow"><span class="metaLabel">Sklep:</span><span>${esc(app.shopName)}</span></div></div></header><table class="orderTable"><thead><tr><th>Lp.</th><th>Nazwa pozycji</th><th>Ilość</th><th>${esc(lastColumnLabel)}</th></tr></thead><tbody>${rows.length?(()=>{let n=0;const productRow=(i,numbered=true,cls='')=>`<tr class="${cls}"><td>${numbered?++n:''}</td><td>${esc(i.productName)}</td><td>${orderValue(i)}</td><td>${lastCell(i)}</td></tr>`;const dep=[['Kaucja puszka',groups.deposits.puszka],['Kaucja PET',groups.deposits.PET]].filter(x=>Number(x[1])>0).map(([label,count])=>`<tr class="depositSummaryRow"><td></td><td><b>${label}</b></td><td><b>${esc(fmtNum(count))} szt.</b></td><td></td></tr>`).join('');const alcoholRows=groups.alcohol.map(i=>productRow(i,true)).join('');n=0;const middleRows=groups.middle.map(i=>productRow(i,true)).join('');const supplyRows=groups.supplies.map((i,idx)=>productRow(i,false,idx===0?'suppliesStart':'')).join('');return alcoholRows+dep+middleRows+supplyRows;})():'<tr><td class="empty" colspan="4">Brak pozycji w zamówieniu</td></tr>'}</tbody></table><div class="sign"><span>Data odbioru: ____________________</span><span>Podpis osoby uprawnionej do odbioru faktury: ____________________</span></div>${auto?'<script>setTimeout(()=>window.print(),300)</script>':''}</body></html>`;
+</style></head><body><button class="printButton" onclick="window.print()">Drukuj / zapisz PDF</button><header class="documentHead"><img class="documentLogo" src="/taranka-header-logo-main.png" alt="TARANKA"><div class="meta"><div class="metaRow"><span class="metaLabel">Numer zamówienia:</span><span>${esc(app.number)}</span></div><div class="metaRow"><span class="metaLabel">Data:</span><span>${esc(app.completedAt||app.createdAt)}</span></div><div class="metaRow"><span class="metaLabel">Sklep:</span><span>${esc(app.shopName)}</span></div></div></header><table class="orderTable"><thead><tr><th>Lp.</th><th>Nazwa pozycji</th><th>Ilość</th><th>${esc(lastColumnLabel)}</th></tr></thead><tbody>${rows.length?(()=>{let n=0;const productRow=(i,numbered=true,cls='')=>`<tr class="${cls}"><td>${numbered?++n:''}</td><td>${esc(i.productName)}</td><td>${orderValue(i)}</td><td>${lastCell(i)}</td></tr>`;const dep=[['Kaucja puszka',groups.deposits.puszka],['Kaucja PET',groups.deposits.PET]].filter(x=>Number(x[1])>0).map(([label,count])=>`<tr class="depositSummaryRow"><td></td><td><b>${label}</b></td><td><b>${esc(fmtNum(count))} szt.</b></td><td></td></tr>`).join('');const alcoholRows=groups.alcohol.map(i=>productRow(i,true)).join('');n=0;const middleRows=groups.middle.map(i=>productRow(i,true)).join('');const supplyRows=groups.supplies.map((i,idx)=>productRow(i,false,idx===0?'suppliesStart':'')).join('');return alcoholRows+dep+middleRows+supplyRows;})():'<tr><td class="empty" colspan="4">Brak pozycji w zamówieniu</td></tr>'}</tbody></table><div class="sign"><span>Data odbioru: ____________________</span><span>Podpis osoby uprawnionej do odbioru faktury: ____________________</span></div>${auto?'<script>setTimeout(()=>window.print(),300)</script>':''}</body></html>`;
 }
 
 function adminBarcodesPage(db){
@@ -6073,7 +6100,7 @@ function requireWarehouseJson(res,session){
 }
 function safeProtectedNext(value){
   const next=String(value||'');
-  return ['/admin-settings','/admin-keg-types','/admin-backup','/admin-accounting'].includes(next)?next:'/admin';
+  return ['/admin-settings','/admin-system-settings','/admin-keg-types','/admin-backup','/admin-accounting'].includes(next)?next:'/admin';
 }
 function protectedSectionsPage(next,error=''){
   return `<section class="card" style="max-width:470px;margin:40px auto;padding:26px"><div style="margin-bottom:14px"><a class="btn secondary" href="/admin">← Повернутись у кабінет</a></div><div class="center"><div style="font-size:46px;margin-bottom:8px">🔒</div><h1 style="margin-bottom:8px">Захищений розділ</h1><p class="muted">Введіть пароль, щоб відкрити цей розділ. Пароль запитується при кожному новому відкритті розділу із замком.</p></div>${error?`<div class="error" style="margin:14px 0">${esc(error)}</div>`:''}<form class="form" method="post" action="/admin-protected-unlock"><input type="hidden" name="next" value="${esc(safeProtectedNext(next))}"><label>Пароль<input type="password" name="password" required autofocus inputmode="numeric" autocomplete="current-password" placeholder="Введіть пароль"></label><button type="submit">Відкрити розділ</button></form></section>`;
@@ -6093,7 +6120,183 @@ function requireProtectedSection(req,res,session,next){
   session.protectedSectionTarget='';
   return true;
 }
+// CSRF tokens are only shown inside the password-protected settings page.
+// A per-process secret avoids writing a new field to the business database.
+const SETTINGS_CSRF_SECRET=crypto.randomBytes(32);
+function settingsCsrfToken(session){
+  return crypto.createHmac('sha256',SETTINGS_CSRF_SECRET)
+    .update('settings-revoke-v1:'+String(session.sid)).digest('hex');
+}
+function settingsCsrfValid(session,value){
+  const provided=String(value||'');
+  const expected=settingsCsrfToken(session);
+  return /^[a-f0-9]{64}$/.test(provided) &&
+    crypto.timingSafeEqual(Buffer.from(provided,'hex'),Buffer.from(expected,'hex'));
+}
+function activeHeaderLogo(db){
+  return db && db.headerLogoVariant==='holiday' ? 'holiday' : 'main';
+}
+// Writes only one new option to the latest disk snapshot. No existing business
+// records, sessions, stock, carts or orders are replaced or removed.
+function saveHeaderLogoVariant(variant){
+  if(variant!=='main' && variant!=='holiday') throw new Error('Invalid logo variant');
+  if(variant==='holiday' && !fs.existsSync(path.join(__dirname,'taranka-header-logo-holiday.png'))){
+    throw new Error('Новорічний логотип не знайдено в проєкті');
+  }
+  const original=JSON.parse(fs.readFileSync(DB_FILE,'utf8'));
+  if(!original || typeof original!=='object' || Array.isArray(original)){
+    throw new Error('Не вдалося відкрити базу. Логотип не змінено.');
+  }
+  if(activeHeaderLogo(original)!==variant || original.headerLogoVariant!==variant){
+    original.headerLogoVariant=variant;
+    atomicReplaceFile(DB_FILE,Buffer.from(JSON.stringify(original,null,2),'utf8'),{keepBackup:true});
+  }
+  const context=requestDbContext.getStore();
+  if(context) context.db=null;
+}
+// Public click-to-call number. The site never dials automatically: a tel: link
+// lets the visitor confirm the call using their own phone application.
+function normalizedSiteCallPhone(value){
+  const phone=String(value||'').trim().replace(/[\s().-]+/g,'');
+  return /^\+?[0-9]{7,15}$/.test(phone)?phone:'';
+}
+function siteCallButtonConfig(db){
+  const stored=db&&db.siteCallButton&&typeof db.siteCallButton==='object'&&!Array.isArray(db.siteCallButton)?db.siteCallButton:{};
+  const phone=normalizedSiteCallPhone(stored.phone);
+  return {phone,enabled:!!stored.enabled&&!!phone};
+}
+// Read the latest JSON snapshot under the same serialized writer lock as the
+// rest of the settings. Update only the call-button setting, preserving data.
+function saveSiteCallButton(phone,enabled){
+  const original=JSON.parse(fs.readFileSync(DB_FILE,'utf8'));
+  if(!original || typeof original!=='object' || Array.isArray(original))throw new Error('База даних недоступна. Налаштування не змінено.');
+  const next={phone,enabled:!!enabled&&!!phone};
+  const old=siteCallButtonConfig(original);
+  if(old.phone!==next.phone||old.enabled!==next.enabled || !original.siteCallButton){
+    original.siteCallButton=next;
+    atomicReplaceFile(DB_FILE,Buffer.from(JSON.stringify(original,null,2),'utf8'),{keepBackup:true});
+  }
+  const context=requestDbContext.getStore();
+  if(context)context.db=null;
+}
+function adminSystemSettingsPage(session,result=''){
+  const success=result==='shops'
+    ?'<div class="successMsg" role="status" style="margin-bottom:16px">Усі сеанси магазинів завершено. Дані та кошики збережено.</div>'
+    :result==='logo-main' || result==='logo-holiday'
+      ?'<div class="successMsg" role="status" style="margin-bottom:16px">Логотип збережено. Обраний варіант показується у верхній панелі сайту.</div>'
+      :result==='call-saved'
+        ?'<div class="successMsg" role="status" style="margin-bottom:16px">Налаштування кнопки виклику збережено.</div>'
+        :result==='call-invalid'
+          ?'<div class="card" role="alert" style="margin-bottom:16px;padding:14px;border-color:#fecaca;color:#991b1b">Введіть коректний номер телефону (7–15 цифр, можна з + на початку) або вимкніть кнопку й очистьте поле.</div>'
+          :'';
+  const settingsDb=readDb();
+  const activeLogo=activeHeaderLogo(settingsDb);
+  const callCfg=siteCallButtonConfig(settingsDb);
+  const csrf=esc(settingsCsrfToken(session));
+  return `<div class="adminShell">${adminMenu()}<section style="min-width:0">
+    <div class="actions" style="justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px">
+      <h1 style="margin:0">Налаштування</h1><a href="/admin" class="btn secondary">← До кабінету складу</a>
+    </div>
+    ${success}
+    <div class="card" style="padding:22px;margin-bottom:18px">
+      <h2 style="margin-top:0">Логотип сайту</h2>
+      <p class="muted">Оберіть логотип для верхнього лівого кута сайту. Зміна застосовується після збереження. Основний логотип не видаляється.</p>
+      <form method="post" action="/admin-system-settings/logo" class="form">
+        <input type="hidden" name="csrf" value="${csrf}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:14px;margin:14px 0 18px">
+          <label style="display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:14px;padding:16px;background:#fff;cursor:pointer;min-width:0">
+            <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="radio" name="logoVariant" value="main" style="width:18px;height:18px;min-width:18px;padding:0;margin:0;flex:0 0 18px;appearance:auto;accent-color:var(--b)" required ${activeLogo==='main'?'checked':''}><strong>Основний</strong>${activeLogo==='main'?'<span class="muted" style="font-size:12px">Активний</span>':''}</span>
+            <span style="min-height:96px;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:white"><img src="/taranka-header-logo-main.png" alt="Основний логотип TARANKA" style="display:block;width:100%;max-width:270px;height:auto;max-height:80px;object-fit:contain"></span>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:14px;padding:16px;background:#fff;cursor:pointer;min-width:0">
+            <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="radio" name="logoVariant" value="holiday" style="width:18px;height:18px;min-width:18px;padding:0;margin:0;flex:0 0 18px;appearance:auto;accent-color:var(--b)" required ${activeLogo==='holiday'?'checked':''}><strong>Новорічний</strong>${activeLogo==='holiday'?'<span class="muted" style="font-size:12px">Активний</span>':''}</span>
+            <span style="min-height:96px;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:white"><img src="/taranka-header-logo-holiday.png" alt="Новорічний логотип TARANKA" style="display:block;width:100%;max-width:270px;height:auto;max-height:80px;object-fit:contain"></span>
+          </label>
+        </div>
+        <button type="submit">Зберегти логотип</button>
+      </form>
+    </div>
+    <div class="card" style="padding:22px;margin-bottom:18px">
+      <h2 style="margin-top:0">Кнопка виклику</h2>
+      <p class="muted">Додайте номер, на який телефонуватимуть із сайту. Кнопка «📞 Дзвінок» з’явиться у верхній панелі на телефонах і комп’ютерах. На смартфоні відкриється стандартний набір номера. Поки номер не задано або кнопку вимкнено, вона не відображається.</p>
+      <form class="form" method="post" action="/admin-system-settings/call" style="display:grid;grid-template-columns:minmax(0,1fr);gap:14px;max-width:520px;margin-top:16px">
+        <input type="hidden" name="csrf" value="${csrf}">
+        <label>Номер для дзвінків
+          <input type="tel" name="callPhone" inputmode="tel" autocomplete="tel" maxlength="35" placeholder="+48 123 456 789" value="${esc(callCfg.phone)}" aria-label="Номер для дзвінків">
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" name="callEnabled" value="1" style="width:18px;height:18px;min-width:18px;margin:0;padding:0;appearance:auto;accent-color:var(--b)" ${callCfg.enabled?'checked':''}>
+          Показувати кнопку виклику на сайті
+        </label>
+        <button type="submit" style="justify-self:start">Зберегти кнопку виклику</button>
+      </form>
+    </div>
+    <div class="card" style="padding:22px">
+      <h2 style="margin-top:0">Керування сеансами</h2>
+      <p class="muted">Ці дії завершують лише авторизацію на пристроях. Товари, замовлення, залишки, кошики та інші збережені дані не видаляються. Перед виходом переконайтеся, що всі незавершені зміни на пристроях збережені.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px;margin-top:18px">
+        <div class="card" style="padding:20px;border:1px solid var(--line)">
+          <h3 style="margin-top:0">Кабінет складу</h3>
+          <p class="muted">Завершити всі входи складу на всіх пристроях, включно з поточним. Магазини залишаться в системі.</p>
+          <form method="post" action="/admin-system-settings/revoke" onsubmit="return confirm('Завершити ВСІ сеанси складу на всіх пристроях, включно з цим? Незбережені зміни на відкритих сторінках можуть загубитися. Перевірте, що їх збережено.')">
+            <input type="hidden" name="scope" value="warehouse"><input type="hidden" name="csrf" value="${csrf}">
+            <button class="danger" type="submit">Завершити всі сеанси складу</button>
+          </form>
+        </div>
+        <div class="card" style="padding:20px;border:1px solid var(--line)">
+          <h3 style="margin-top:0">Кабінети магазинів</h3>
+          <p class="muted">Завершити входи всіх магазинів на всіх пристроях. Кабінет складу залишиться відкритим.</p>
+          <form method="post" action="/admin-system-settings/revoke" onsubmit="return confirm('Завершити ВСІ сеанси ВСІХ магазинів? Незбережені зміни на відкритих сторінках можуть загубитися. Перевірте, що їх збережено.')">
+            <input type="hidden" name="scope" value="shops"><input type="hidden" name="csrf" value="${csrf}">
+            <button class="danger" type="submit">Завершити всі сеанси магазинів</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section></div>`;
+}
+// Called only inside the serialized POST writer lock. Reads the original JSON
+// from disk and removes ONLY login records, never touching carts, orders,
+// products, accounts or any other business data.
+function revokeSessionsOnly(scope){
+  if(scope!=='warehouse' && scope!=='shops') throw new Error('Invalid session scope');
+  const original=JSON.parse(fs.readFileSync(DB_FILE,'utf8'));
+  if(!original || typeof original!=='object' || !original.sessions ||
+      typeof original.sessions!=='object' || Array.isArray(original.sessions)){
+    throw new Error('Сховище сеансів недоступне; операцію зупинено без змін.');
+  }
+  const removed=[];
+  for(const [sid,stored] of Object.entries(original.sessions)){
+    if(!stored || typeof stored!=='object') continue;
+    const warehouse=!!stored.admin || stored.shop==='Склад';
+    const shop=!!stored.shop && stored.shop!=='Склад' && !stored.admin;
+    if((scope==='warehouse' && warehouse) || (scope==='shops' && shop)){
+      removed.push(sid);
+      delete original.sessions[sid];
+    }
+  }
+  if(removed.length){
+    // Atomic replacement + previous-file .bak; exceptions leave the source intact.
+    atomicReplaceFile(DB_FILE,Buffer.from(JSON.stringify(original,null,2),'utf8'),{keepBackup:true});
+  }
+  for(const sid of removed) sessions.delete(sid);
+  // Discard cached DB snapshot; a follow-up read must see revoked credentials.
+  const context=requestDbContext.getStore();
+  if(context) context.db=null;
+  return removed.length;
+}
+function sessionRevokedPage(){
+  return `<section class="card center" style="max-width:560px;margin:46px auto;padding:34px">
+    <div style="font-size:46px">🔒</div><h1>Сеанси складу завершено</h1>
+    <p>Усі пристрої складу вийшли з акаунта. Збережені товари, замовлення, кошики та інші дані не змінено.</p>
+    <a class="btn" href="/">Увійти знову</a>
+  </section>`;
+}
+
 function requireShop(req,res,session){ if(!session.shop || !isValidShop(session.shop)){ redirect(res,'/'); return false;} return true; }
+
+const writeOffPollScript=fs.readFileSync(path.join(__dirname,'writeoffs-poll.js'),'utf8');
+const writeOffFeature=writeOffModule.create({esc,layout,adminMenu,getShops,writeDb,send,redirect,rawBody,sendJson,PDFDocument,marketPdfFontFiles,activeHeaderLogo,notificationsCount,notificationsPanel});
 
 async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://${req.headers.host}`);
   // These routes are intentionally handled before sessions and the JSON database.
@@ -6107,10 +6310,19 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
     res.writeHead(200,{'Content-Type':'image/webp','Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff'});
     return fs.createReadStream(file).pipe(res);
   }
-  if(req.method==='GET' && url.pathname==='/taranka-header-logo.png'){
-    const headerLogoPath=path.join(__dirname,'taranka-header-logo.png');
-    if(fs.existsSync(headerLogoPath)){ res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'public,max-age=86400'}); return res.end(fs.readFileSync(headerLogoPath)); }
-    res.writeHead(404); return res.end('Not found');
+  if(req.method==='GET' && ['/taranka-header-logo.png','/taranka-header-logo-main.png','/taranka-header-logo-holiday.png'].includes(url.pathname)){
+    const isActive=url.pathname==='/taranka-header-logo.png';
+    const variant=isActive
+      ? activeHeaderLogo(JSON.parse(fs.readFileSync(DB_FILE,'utf8')))
+      : (url.pathname==='/taranka-header-logo-holiday.png'?'holiday':'main');
+    const filename=variant==='holiday'?'taranka-header-logo-holiday.png':'taranka-header-logo.png';
+    const headerLogoPath=path.join(__dirname,filename);
+    if(fs.existsSync(headerLogoPath)){
+      // no-store avoids stale logos after selecting a different variant.
+      res.writeHead(200,{'Content-Type':'image/png','Cache-Control':isActive?'no-store, max-age=0, must-revalidate':'public, max-age=86400','X-Content-Type-Options':'nosniff'});
+      return res.end(fs.readFileSync(headerLogoPath));
+    }
+    res.writeHead(404,{'Cache-Control':'no-store'}); return res.end('Not found');
   }
   if(req.method==='GET' && (url.pathname==='/taranka-logo.png' || url.pathname==='/logo.png')){
     const logoPath=path.join(__dirname,'taranka-logo.png');
@@ -6121,6 +6333,7 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
   const session=getSession(req,res);
   let db=readDb();
   if(session.shop && isValidShopInDb(db, session.shop)) schedulePresenceUpdate(db,session);
+  if(/^\/(?:admin-)?writeoffs(?:\/|$)/.test(url.pathname) && await writeOffFeature.route(req,res,url,db,session)) return;
 
   if(req.method==='GET' && url.pathname==='/'){
     if(session.admin) return redirect(res,'/admin');
@@ -6134,6 +6347,9 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
       session.admin=true;
       session.shop=null;
       session.protectedSectionsUnlocked=false;
+      session.protectedSectionActive='';
+      session.protectedSectionTicket='';
+      session.protectedSectionTarget='';
       saveSession(session);
       return redirect(res,'/admin');
     }
@@ -6141,6 +6357,9 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
     if(shop && checkShopPassword(db, shop, b.password)){
       session.admin=false;
       session.shop=shop.name;
+      session.protectedSectionActive='';
+      session.protectedSectionTicket='';
+      session.protectedSectionTarget='';
       loadCartForSession(session);
       saveSession(session);
       return redirect(res,'/catalog');
@@ -6300,6 +6519,7 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
         <span class="catAllLabel">Усі товари</span>
         <span class="catAllCount">${db.products.filter(p=>!p.hidden).length}</span>
       </a>
+      <a href="/writeoffs" class="woCatLink" style="display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-weight:600;font-size:13px;text-decoration:none;color:var(--d);background:#fff;margin:4px 0">📄 Списання товарів</a>
       <a href="/catalog?new=1" data-catalog-navigation class="catNewLink ${onlyNew?'catNewActive':''}">
         <span class="catAllIcon" style="background:rgba(124,58,237,.08);display:flex;align-items:center;justify-content:center">${NEW_SVG_ICON}</span>
         <span class="catAllLabel">Новинки${badge(unread.newProducts)}</span>
@@ -6619,9 +6839,52 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
   if(req.method==='POST' && url.pathname==='/checkout'){ if(!requireShop(req,res,session)) return; if(!session.cart.length) return redirect(res,'/cart'); const b=await body(req); const orderNo=nextOrderNumber(db); const orderItems=[...session.cart]; const order={id:String(nowMs()), orderNo, shop:session.shop, items:orderItems, kegItems:captureOrderKegItems(db,orderItems), comment:String(b.comment||'').trim(), status:'Нове', createdAt:warsawTime(), createdMs:nowMs()}; db.orders.push(order); session.cart=[]; db.carts=db.carts||{}; db.carts[cartKey(session)]=[]; writeDb(db); return send(res, layout('Замовлення прийнято', `<section class="card center" style="padding:40px"><h1>Замовлення №${orderNo} прийнято!</h1><p class="muted">Замовлення успішно надіслано</p><div class="actions checkoutDoneActions"><a class="btn checkoutDoneBtn" href="/catalog">Продовжити покупки</a><a class="btn secondary checkoutDoneBtn" href="/cart">Мої замовлення</a></div></section>`, session)); }
   if(req.method==='GET' && url.pathname==='/admin-login'){ return redirect(res,'/'); }
   if(req.method==='POST' && url.pathname==='/admin-login'){ return redirect(res,'/'); }
-  if(req.method==='GET' && url.pathname==='/admin-logout'){ session.admin=false; session.protectedSectionsUnlocked=false; saveSession(session); return redirect(res,'/'); }
+  if(req.method==='GET' && url.pathname==='/admin-logout'){ session.admin=false; session.protectedSectionsUnlocked=false; session.protectedSectionActive=''; session.protectedSectionTicket=''; session.protectedSectionTarget=''; saveSession(session); return redirect(res,'/'); }
   if(req.method==='GET' && url.pathname==='/admin-protected'){ if(!requireAdmin(req,res,session)) return; const next=safeProtectedNext(url.searchParams.get('next')); const error=url.searchParams.get('error')==='wrong'?'Невірний пароль. Спробуйте ще раз.':''; return send(res,layout('Захищений розділ',protectedSectionsPage(next,error),session)); }
   if(req.method==='POST' && url.pathname==='/admin-protected-unlock'){ if(!requireAdmin(req,res,session)) return; const b=await body(req); const next=safeProtectedNext(b.next); if(String(b.password||'')!==PROTECTED_SECTIONS_PASSWORD) return redirect(res,`/admin-protected?next=${encodeURIComponent(next)}&error=wrong`); const ticket=crypto.randomBytes(24).toString('hex'); session.protectedSectionActive=''; session.protectedSectionTicket=ticket; session.protectedSectionTarget=next; return redirect(res,`${next}?protectedTicket=${encodeURIComponent(ticket)}`); }
+  if(req.method==='GET' && url.pathname==='/admin-system-settings'){
+    if(!requireProtectedSection(req,res,session,'/admin-system-settings')) return;
+    res.setHeader('Cache-Control','no-store');
+    return send(res,layout('Налаштування',adminSystemSettingsPage(session,url.searchParams.get('result')),session));
+  }
+  if(req.method==='POST' && url.pathname==='/admin-system-settings/logo'){
+    if(!requireProtectedSection(req,res,session,'/admin-system-settings')) return;
+    const b=await body(req);
+    if(!settingsCsrfValid(session,b.csrf)){
+      return send(res,layout('Помилка безпеки','<section class="card center" style="padding:28px"><h1>Помилка перевірки запиту</h1><p>Оновіть налаштування та повторіть дію.</p><a class="btn" href="/admin-system-settings">Повернутися</a></section>',session),403);
+    }
+    const variant=String(b.logoVariant||'');
+    if(variant!=='main' && variant!=='holiday') return send(res,'Некоректний логотип',400);
+    saveHeaderLogoVariant(variant);
+    return redirect(res,'/admin-system-settings?result=logo-'+variant);
+  }
+  if(req.method==='POST' && url.pathname==='/admin-system-settings/call'){
+    if(!requireProtectedSection(req,res,session,'/admin-system-settings')) return;
+    const b=await body(req);
+    if(!settingsCsrfValid(session,b.csrf)){
+      return send(res,layout('Помилка безпеки','<section class="card center" style="padding:28px"><h1>Помилка перевірки запиту</h1><p>Оновіть налаштування та повторіть дію.</p><a class="btn" href="/admin-system-settings">Повернутися</a></section>',session),403);
+    }
+    const submitted=String(b.callPhone||'').trim();
+    const phone=normalizedSiteCallPhone(submitted);
+    const enabled=b.callEnabled==='1';
+    if((submitted&&!phone) || (enabled&&!phone))return redirect(res,'/admin-system-settings?result=call-invalid');
+    saveSiteCallButton(phone,enabled);
+    return redirect(res,'/admin-system-settings?result=call-saved');
+  }
+  if(req.method==='POST' && url.pathname==='/admin-system-settings/revoke'){
+    if(!requireProtectedSection(req,res,session,'/admin-system-settings')) return;
+    const b=await body(req);
+    if(!settingsCsrfValid(session,b.csrf)){
+      return send(res,layout('Помилка безпеки','<section class="card center" style="padding:28px"><h1>Помилка перевірки запиту</h1><p>Оновіть налаштування та повторіть дію.</p><a class="btn" href="/admin-system-settings">Повернутися</a></section>',session),403);
+    }
+    const scope=String(b.scope||'');
+    if(scope!=='warehouse' && scope!=='shops') return send(res,'Некоректна операція',400);
+    revokeSessionsOnly(scope);
+    if(scope==='shops')return redirect(res,'/admin-system-settings?result=shops');
+    res.setHeader('Set-Cookie','sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+    res.setHeader('Cache-Control','no-store');
+    return send(res,layout('Сеанси складу завершено',sessionRevokedPage(),{admin:false,shop:null,cart:[]}));
+  }
   if(req.method==='GET' && url.pathname==='/admin'){ if(!requireAdmin(req,res,session)) return; session.protectedSectionActive=''; session.protectedSectionTicket=''; session.protectedSectionTarget=''; return send(res, layout('Кабінет складу', adminCabinetPage(db), session)); }
   if(req.method==='GET' && url.pathname==='/admin-statistics'){ if(!requireAdmin(req,res,session)) return; res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store, no-cache, must-revalidate','Pragma':'no-cache'}); return res.end(layout('Статистика',statisticsPage(db,url),session)); }
   if(req.method==='GET' && url.pathname==='/admin-statistics.xlsx'){ if(!requireAdmin(req,res,session)) return; const xlsx=statisticsXlsx(db,url); res.writeHead(200,{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':contentDispositionXlsx(`statystyka-towarow_${exportFileDate()}.xlsx`),'Cache-Control':'no-store'}); return res.end(xlsx); }
@@ -6995,14 +7258,14 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
     };
     return send(res, layout('Резервна копія', `<div class="adminShell">${adminMenu()}<section><div style="margin-bottom:14px"><a class="btn secondary" href="/admin">← Повернутись назад</a></div><h1>Резервна копія</h1><div style="display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));max-width:1100px">
       <div class="card" style="padding:20px"><h2 style="margin-top:0">Скачати базу даних</h2><p class="muted">Завантажує поточний файл db.json.</p><form class="form" method="post" action="/admin-backup/download"><button type="submit">Скачати db.json</button></form></div>
-      <div class="card" style="padding:20px"><h2 style="margin-top:0">Відновити базу даних</h2><p class="muted">Виберіть раніше збережений JSON. Поточна база буде замінена лише після перевірки файлу.</p>${msg.dbInvalid?'<div class="error">Файл не є коректною базою даних.</div>':''}${msg.dbOk?'<div class="success">Базу даних успішно відновлено.</div>':''}<form class="form" method="post" action="/admin-backup/restore" enctype="multipart/form-data" onsubmit="return confirm('Поточну базу даних буде замінено. Продовжити?')"><label>Файл db.json<input type="file" name="database" accept="application/json,.json" required></label><button class="danger" type="submit">Відновити базу даних</button></form></div>
+      <div class="card" style="padding:20px"><h2 style="margin-top:0">Відновити базу даних</h2><p class="muted">Виберіть раніше збережений JSON. Поточна база буде замінена лише після перевірки файлу. Якщо стара копія не містить розділу списань, чинні списання збережуться.</p>${msg.dbInvalid?'<div class="error">Файл не є коректною базою даних.</div>':''}${msg.dbOk?'<div class="success">Базу даних успішно відновлено.</div>':''}<form class="form" method="post" action="/admin-backup/restore" enctype="multipart/form-data" onsubmit="return confirm('Поточну базу даних буде замінено. Продовжити?')"><label>Файл db.json<input type="file" name="database" accept="application/json,.json" required></label><button class="danger" type="submit">Відновити базу даних</button></form></div>
       <div class="card" style="padding:20px"><h2 style="margin-top:0">Скачати базу робочих годин</h2><p class="muted">Окрема резервна копія всіх записів робочого часу, працівників магазинів і працівників складу. Інші дані сайту до цього файлу не входять.</p><form class="form" method="post" action="/admin-backup/work-hours-download"><button type="submit">Скачати робочі години JSON</button></form></div>
       <div class="card" style="padding:20px"><h2 style="margin-top:0">Відновити базу робочих годин</h2><p class="muted">Відновлює тільки облік робочого часу та списки працівників. Товари, замовлення, фото й інші дані не змінюються.</p>${msg.workHoursInvalid?'<div class="error">Файл не є коректною резервною копією робочих годин.</div>':''}${msg.workHoursOk?'<div class="success">Робочі години та дані працівників успішно відновлено.</div>':''}<form class="form" method="post" action="/admin-backup/work-hours-restore" enctype="multipart/form-data" onsubmit="return confirm('Поточні записи робочих годин буде замінено даними з резервної копії. Продовжити?')"><label>JSON робочих годин<input type="file" name="workHoursBackup" accept="application/json,.json" required></label><button class="danger" type="submit">Відновити робочі години</button></form></div>
       <div class="card" style="padding:20px"><h2 style="margin-top:0">Скачати базу фотографій</h2><p class="muted">Усі фото товарів одним ZIP-архівом.</p>${msg.photosEmpty?'<div class="error">Фотографії товарів відсутні.</div>':''}<form class="form" method="post" action="/admin-backup/photos-download"><button type="submit">Скачати фотографії ZIP</button></form></div>
       <div class="card" style="padding:20px"><h2 style="margin-top:0">Відновити базу фотографій</h2><p class="muted">Виберіть ZIP, створений цією сторінкою. Наявна папка фотографій буде замінена після перевірки.</p>${msg.photosInvalid?'<div class="error">ZIP пошкоджений або має неправильну структуру.</div>':''}${msg.photosOk?'<div class="success">Фотографії успішно відновлено.</div>':''}<form class="form" method="post" action="/admin-backup/photos-restore" enctype="multipart/form-data" onsubmit="return confirm('Поточні фотографії товарів буде замінено. Продовжити?')"><label>ZIP із фотографіями<input type="file" name="photos" accept="application/zip,.zip" required></label><button class="danger" type="submit">Відновити фотографії</button></form></div>
     </div></section></div>`, session)); }
   if(req.method==='POST' && url.pathname==='/admin-backup/download'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; ensureDb(); const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'').slice(0,14); const filename=`taranka_database_${stamp}.json`; const stat=fs.statSync(DB_FILE); res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="${filename}"`,'Content-Length':stat.size,'Cache-Control':'no-store'}); return fs.createReadStream(DB_FILE).pipe(res); }
-  if(req.method==='POST' && url.pathname==='/admin-backup/restore'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; try{ const raw=await rawBody(req,100*1024*1024); const form=parseMultipartForm(raw,req.headers['content-type']); const file=form.files.database; if(!file||!file.buffer.length) return redirect(res,'/admin-backup?dbError=invalid'); const parsed=JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/,'')); if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)||!Array.isArray(parsed.products)||!Array.isArray(parsed.orders)) return redirect(res,'/admin-backup?dbError=invalid'); const normalized=JSON.stringify(parsed,null,2); JSON.parse(normalized); atomicReplaceFile(DB_FILE,Buffer.from(normalized),{keepBackup:true}); return redirect(res,'/admin-backup?dbRestore=ok'); }catch(error){console.error('[restore db]',error);return redirect(res,'/admin-backup?dbError=invalid');} }
+  if(req.method==='POST' && url.pathname==='/admin-backup/restore'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; try{ const raw=await rawBody(req,100*1024*1024); const form=parseMultipartForm(raw,req.headers['content-type']); const file=form.files.database; if(!file||!file.buffer.length) return redirect(res,'/admin-backup?dbError=invalid'); const parsed=JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/,'')); if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)||!Array.isArray(parsed.products)||!Array.isArray(parsed.orders)) return redirect(res,'/admin-backup?dbError=invalid'); if(!Object.prototype.hasOwnProperty.call(parsed,'writeOffRequests')){parsed.writeOffRequests=writeOffModule.list(db);parsed.writeOffSequence=db.writeOffSequence||0;}else if(!Array.isArray(parsed.writeOffRequests))return redirect(res,'/admin-backup?dbError=invalid'); parsed.writeOffSequence=Math.max(Number(parsed.writeOffSequence)||0,Number(db.writeOffSequence)||0); const normalized=JSON.stringify(parsed,null,2); JSON.parse(normalized); atomicReplaceFile(DB_FILE,Buffer.from(normalized),{keepBackup:true}); return redirect(res,'/admin-backup?dbRestore=ok'); }catch(error){console.error('[restore db]',error);return redirect(res,'/admin-backup?dbError=invalid');} }
   if(req.method==='POST' && url.pathname==='/admin-backup/work-hours-download'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; const shops=getShops(db); const payload={format:'taranka-work-hours-backup',version:1,createdAt:warsawTime(),workHours:Array.isArray(db.workHours)?db.workHours:[],warehouseEmployees:Array.isArray(db.warehouseEmployees)?db.warehouseEmployees:[],shopEmployees:shops.map(shop=>({shopId:String(shop.id||''),shopName:String(shop.name||''),employees:Array.isArray(shop.employees)?shop.employees:[]}))}; const data=Buffer.from(JSON.stringify(payload,null,2),'utf8'); const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'').slice(0,14); const filename=`taranka_work_hours_${stamp}.json`; res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="${filename}"`,'Content-Length':data.length,'Cache-Control':'no-store'}); return res.end(data); }
   if(req.method==='POST' && url.pathname==='/admin-backup/work-hours-restore'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; try{ const raw=await rawBody(req,50*1024*1024); const form=parseMultipartForm(raw,req.headers['content-type']); const file=form.files.workHoursBackup; if(!file||!file.buffer.length) return redirect(res,'/admin-backup?workHoursError=invalid'); const parsed=JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/,'')); const valid=parsed&&typeof parsed==='object'&&!Array.isArray(parsed)&&parsed.format==='taranka-work-hours-backup'&&Number(parsed.version)===1&&Array.isArray(parsed.workHours)&&Array.isArray(parsed.warehouseEmployees)&&Array.isArray(parsed.shopEmployees)&&parsed.workHours.every(x=>x&&typeof x==='object'&&!Array.isArray(x))&&parsed.warehouseEmployees.every(x=>x&&typeof x==='object'&&!Array.isArray(x))&&parsed.shopEmployees.every(x=>x&&typeof x==='object'&&!Array.isArray(x)&&Array.isArray(x.employees)); if(!valid) return redirect(res,'/admin-backup?workHoursError=invalid'); db.workHours=JSON.parse(JSON.stringify(parsed.workHours)); db.warehouseEmployees=JSON.parse(JSON.stringify(parsed.warehouseEmployees)); const employeeBackup=parsed.shopEmployees; for(const shop of getShops(db)){ const saved=employeeBackup.find(x=>String(x.shopId||'')===String(shop.id||''))||employeeBackup.find(x=>String(x.shopName||'')===String(shop.name||'')); if(saved) shop.employees=JSON.parse(JSON.stringify(saved.employees)); } normalizeShops(db); writeDb(db); return redirect(res,'/admin-backup?workHoursRestore=ok'); }catch(error){console.error('[restore work hours]',error);return redirect(res,'/admin-backup?workHoursError=invalid');} }
   if(req.method==='POST' && url.pathname==='/admin-backup/photos-download'){ if(!requireProtectedSection(req,res,session,'/admin-backup')) return; fs.mkdirSync(PRODUCT_UPLOADS_DIR,{recursive:true}); const photoFiles=fs.readdirSync(PRODUCT_UPLOADS_DIR,{withFileTypes:true}).filter(entry=>entry.isFile()&&/\.webp$/i.test(entry.name)).map(entry=>entry.name); if(!photoFiles.length) return redirect(res,'/admin-backup?photosError=empty'); const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'').slice(0,14); const filename=`taranka_product_photos_${stamp}.zip`; res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="${filename}"`,'Cache-Control':'no-store'}); const archive=archiver('zip',{zlib:{level:6}}); archive.on('warning',error=>{if(error.code!=='ENOENT')console.error('[backup photos warning]',error)}); archive.on('error',error=>{console.error('[backup photos error]',error);if(!res.headersSent)res.writeHead(500);res.end()}); archive.pipe(res); archive.directory(PRODUCT_UPLOADS_DIR,'products'); archive.finalize(); return; }
@@ -7064,6 +7327,8 @@ function requestUsesStaticFastPath(req){
   const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
   return url.pathname==='/healthz'
     || url.pathname==='/taranka-header-logo.png'
+    || url.pathname==='/taranka-header-logo-main.png'
+    || url.pathname==='/taranka-header-logo-holiday.png'
     || url.pathname==='/taranka-logo.png'
     || url.pathname==='/logo.png'
     || url.pathname.startsWith('/uploads/products/');
