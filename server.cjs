@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const writeOffModule = require('./writeoffs.cjs');
+const emptyKegModule = require('./empty-kegs.cjs');
 const { AsyncLocalStorage } = require('async_hooks');
 const querystring = require('querystring');
 const PDFDocument = require('pdfkit');
@@ -174,7 +175,7 @@ function restoreDatabase(raw,contentType,current){
   const parsed=JSON.parse(file.toString('utf8').replace(/^\uFEFF/,''));
   const record=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
   if(!record(parsed)||!Array.isArray(parsed.products)||!Array.isArray(parsed.orders))throw Error('Invalid database structure');
-  for(const key of ['products','orders','shops','notes','announcements','chatMessages','directMessages','accountingReports','applications','applicationLogs','productBarcodes','kegTypes','kegReturns','kegAdjustments','kegTransfers','stockMovements','workHours','warehouseEmployees','writeOffRequests']){
+  for(const key of ['products','orders','shops','notes','announcements','chatMessages','directMessages','accountingReports','applications','applicationLogs','productBarcodes','kegTypes','kegReturns','kegAdjustments','kegTransfers','stockMovements','workHours','warehouseEmployees','writeOffRequests','emptyKegTypes','emptyKegReceipts','emptyKegAuditLog']){
     if(!Object.prototype.hasOwnProperty.call(parsed,key))continue;
     if(!Array.isArray(parsed[key])||parsed[key].some(v=>!record(v)&&!(key==='shops'&&typeof v==='string')))throw Error('Invalid database collection: '+key);
   }
@@ -186,6 +187,11 @@ function restoreDatabase(raw,contentType,current){
     parsed.writeOffSequence=current.writeOffSequence||0;
   }
   parsed.writeOffSequence=Math.max(Number(parsed.writeOffSequence)||0,Number(current.writeOffSequence)||0);
+  // Legacy backups must not erase the independent empty-keg journal.
+  for(const key of ['emptyKegTypes','emptyKegReceipts','emptyKegAuditLog']){
+    if(!Object.prototype.hasOwnProperty.call(parsed,key))parsed[key]=Array.isArray(current[key])?current[key]:[];
+  }
+  emptyKegModule.validateBackup(parsed);
   // Preserve the exact pre-restore file independently of the rotating .bak.
   // Copy directly on disk, never read another complete DB into memory here.
   const recovery=DB_FILE+'.before-restore';
@@ -548,7 +554,7 @@ function adminChatPage(db, session){
   return `<div class="adminShell">${adminMenu()}<section><div class="actions" style="align-items:center;justify-content:space-between;margin-bottom:12px"><h1 style="margin:0">Чат</h1><a class="btn secondary" href="/chat">Відкрити чат</a></div><div class="card" style="padding:20px;margin-bottom:16px"><h2>Учасники чату</h2><p class="muted">Позначте магазини, яким доступний чат. Інші магазини не бачитимуть кнопку та не зможуть відкрити чат.</p><form method="post" action="/admin/chat-members"><div class="shopChecks">${shops.map(shop=>`<label class="shopCheck"><span class="shopCheckName">${esc(shop.name)}</span><input type="checkbox" name="members" value="${esc(shop.name)}" ${members.has(shop.name)?'checked':''}></label>`).join('')}</div><button>Зберегти учасників</button></form></div><div class="card chatBox"><div class="chatHeader"><div><h2>Повідомлення</h2><p class="muted">Відповідайте магазинам у зручному чистому вікні.</p></div></div><div class="chatMessages">${chatMessagesHtml(db, true)}</div><form class="form chatForm" method="post" action="/chat/send"><label>Повідомлення від складу<textarea name="text" required placeholder="Напишіть повідомлення магазинам..."></textarea></label><button>Надіслати</button></form></div></section></div>`;
 }
 
-function adminMenu(active=''){ const menuDb=readDb(),msgUnread=adminDirectUnread(menuDb),notifUnread=notificationsCount(menuDb,{admin:true}),activeClass=key=>active===key?' class="active" aria-current="page"':''; return `<a class="mobileBackToCabinet" href="/admin">← Перейти у Кабінет складу</a><aside class="adminMenu"><div class="adminMenuHead"><a class="adminMenuLogo" href="/admin" style="text-decoration:none">Кабінет</a></div><a href="/admin-notifications">Сповіщення${badgeCount(notifUnread)}</a><a href="/admin-settings">🔒 Налаштування магазинів</a><a href="/admin-products">Товар</a><a href="/admin-statistics"${activeClass('statistics')}>📊 Статистика</a><a href="/admin-market"${activeClass('market')}>📋 Ринок</a><a href="/admin-barcodes">Штрихкоди товарів</a><a href="/admin-new-products">Новинки</a><a href="/admin-applications">Нова заявка</a><a data-unread-key="directMessages" href="/admin-messages">Повідомлення${badgeCount(msgUnread)}</a><a href="/admin-notes">Нотатки</a><a href="/admin-announcements">Оголошення</a><a href="/admin-orders">Замовлення</a><a href="/admin-writeoffs"${activeClass('writeoffs')}>📄 Списання магазинів${badgeCount(writeOffModule.pending(menuDb))}</a><a href="/admin-accounting">🔒 Журнал обліку</a><a href="/admin-work-hours">⏱️ Робочі години</a><a href="/admin-missing-products">Відсутні товари</a><a href="/admin-hidden-products">Приховані позиції</a><a href="/admin-backup">🔒 Резервна копія</a><a href="/admin-logout" class="adminMenuLogout">Вийти</a></aside>`; }
+function adminMenu(active=''){ const menuDb=readDb(),msgUnread=adminDirectUnread(menuDb),notifUnread=notificationsCount(menuDb,{admin:true}),activeClass=key=>active===key?' class="active" aria-current="page"':''; return `<a class="mobileBackToCabinet" href="/admin">← Перейти у Кабінет складу</a><aside class="adminMenu"><div class="adminMenuHead"><a class="adminMenuLogo" href="/admin" style="text-decoration:none">Кабінет</a></div><a href="/admin-notifications">Сповіщення${badgeCount(notifUnread)}</a><a href="/admin-settings">🔒 Налаштування магазинів</a><a href="/admin-products">Товар</a><a href="/admin-statistics"${activeClass('statistics')}>📊 Статистика</a><a href="/admin-market"${activeClass('market')}>📋 Ринок</a><a href="/admin-barcodes">Штрихкоди товарів</a><a href="/admin-new-products">Новинки</a><a href="/admin-applications">Нова заявка</a><a data-unread-key="directMessages" href="/admin-messages">Повідомлення${badgeCount(msgUnread)}</a><a href="/admin-notes">Нотатки</a><a href="/admin-announcements">Оголошення</a><a href="/admin-orders">Замовлення</a><a href="/admin-writeoffs"${activeClass('writeoffs')}>📄 Списання магазинів${badgeCount(writeOffModule.pending(menuDb))}</a><a href="/admin-empty-kegs"${activeClass('empty-kegs')}>🛢️ Приймання порожніх кег</a><a href="/admin-accounting">🔒 Журнал обліку</a><a href="/admin-work-hours">⏱️ Робочі години</a><a href="/admin-missing-products">Відсутні товари</a><a href="/admin-hidden-products">Приховані позиції</a><a href="/admin-backup">🔒 Резервна копія</a><a href="/admin-logout" class="adminMenuLogout">Вийти</a></aside>`; }
 
 function pluralUk(n, one, few, many){
   n=Math.abs(Number(n)||0); const n10=n%10,n100=n%100;
@@ -648,7 +654,7 @@ function adminCabinetPage(db){
     ['Сповіщення','/admin-notifications','🔔',notificationsCount(db,{admin:true})],
     ['Замовлення','/admin-orders','🧾'],['Списання магазинів','/admin-writeoffs','📄',writeOffModule.pending(db)],['Нова заявка','/admin-applications','📲'],['Товари','/admin-products','📦'],['Статистика','/admin-statistics','📊'],['Ринок','/admin-market','📋'],['Штрихкоди товарів','/admin-barcodes','▥',(db.productBarcodes||[]).length],
     ['Новинки','/admin-new-products','🆕',(db.products||[]).filter(p=>p.isNew&&!p.hidden).length],['Відсутні товари','/admin-missing-products','⚠️',missingProductRows(db).length],['Приховані позиції','/admin-hidden-products','🙈'],
-    ['Журнал обліку','/admin-accounting','🔒'],['Робочі години','/admin-work-hours','⏱️'],
+    ['Журнал обліку','/admin-accounting','🔒'],['Робочі години','/admin-work-hours','⏱️'],['Приймання порожніх кег','/admin-empty-kegs','🛢️'],
     ['Повідомлення','/admin-messages','✉️',adminDirectUnread(db)],['Оголошення','/admin-announcements','📢'],
     ['Нотатки','/admin-notes','📝'],['Налаштування магазинів','/admin-settings','🔒'],['Налаштування','/admin-system-settings','⚙️',0,'gear'],['Резервна копія','/admin-backup','🔒'],['Вийти зі складу','/admin-logout','🚪',0,'logout']
   ];
@@ -6375,6 +6381,8 @@ function requireShop(req,res,session){ if(!session.shop || !isValidShop(session.
 const writeOffPollScript=fs.readFileSync(path.join(__dirname,'writeoffs-poll.js'),'utf8');
 const writeOffFeature=writeOffModule.create({esc,layout,adminMenu,getShops,writeDb,send,redirect,rawBody,sendJson,PDFDocument,marketPdfFontFiles,activeHeaderLogo,notificationsCount,notificationsPanel});
 
+const emptyKegFeature=emptyKegModule.create({esc,layout,adminMenu,getShops,writeDb,send,redirect,rawBody,sendJson,PDFDocument,marketPdfFontFiles,protectedPassword:process.env.EMPTY_KEG_EDIT_PASSWORD || PROTECTED_SECTIONS_PASSWORD});
+
 async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://${req.headers.host}`);
   // These routes are intentionally handled before sessions and the JSON database.
   // Product photos use unique filenames, so immutable browser caching remains safe:
@@ -6410,6 +6418,7 @@ async function handleRequest(req,res){ try{ const url=new URL(req.url, `http://$
   const session=getSession(req,res);
   let db=readDb();
   if(session.shop && isValidShopInDb(db, session.shop)) schedulePresenceUpdate(db,session);
+  if(/^\/admin-empty-kegs(?:\/|$)/.test(url.pathname) && await emptyKegFeature.route(req,res,url,db,session)) return;
   if(/^\/(?:admin-)?writeoffs(?:\/|$)/.test(url.pathname) && await writeOffFeature.route(req,res,url,db,session)) return;
 
   if(req.method==='GET' && url.pathname==='/'){
